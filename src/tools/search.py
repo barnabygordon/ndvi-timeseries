@@ -2,6 +2,8 @@ import requests
 from osgeo import gdal
 import numpy as np
 from pyproj import Proj, transform
+import urllib2
+import math
 
 api_url = 'https://api.developmentseed.org/landsat'
 
@@ -69,12 +71,16 @@ def _query_builder(lng, lat, min_date, max_date):
 
 def _aws_get_ndvi(scene_id, lng, lat):
 
+    path, row = scene_id[3:6], scene_id[6:9]
+
     bands = [5, 4]
     data = []
 
+    meta_data = _get_aws_meta(scene_id, path, row)
+
     for band in bands:
 
-        url = _aws_url_builder(scene_id, band)
+        url = _aws_url_builder(scene_id, path, row, band)
 
         src = gdal.Open(url)
         prj = src.GetProjection()
@@ -84,18 +90,26 @@ def _aws_get_ndvi(scene_id, lng, lat):
 
         x, y = _world2pixel(src, lng2, lat2)
 
-        pixel = src.ReadAsArray(y, x, 1, 1).astype('float32')
+        dn = src.ReadAsArray(y, x, 1, 1).astype('float32')
 
-        data.append(pixel)
+        reflectance = _radiance2reflectance(dn, band, meta_data)
+
+        data.append(reflectance)
 
     ndvi = (data[0] - data[1]) / (data[0] + data[1])
 
     return ndvi
 
 
-def _aws_url_builder(scene_id, band):
+def _get_aws_meta(scene_id, path, row):
 
-    path, row = scene_id[3:6], scene_id[6:9]
+    meta_url = 'http://landsat-pds.s3.amazonaws.com/L8/%s/%s/%s/%s_MTL.txt' % (path, row, scene_id, scene_id)
+    meta_data = urllib2.urlopen(meta_url).readlines()
+
+    return meta_data
+
+
+def _aws_url_builder(scene_id, path, row, band):
 
     url = '/vsicurl/http://landsat-pds.s3.amazonaws.com/L8/%s/%s/%s/%s_B%s.TIF' % (path, row, scene_id, scene_id, band)
 
@@ -124,3 +138,26 @@ def _world2pixel(src, lng, lat):
 
     return x, y
 
+
+def _radiance2reflectance(dn, band, meta_data):
+
+    Mp = float(_landsat_extractMTL(meta_data, "REFLECTANCE_MULT_BAND_%i" % (band)))
+    Ap = float(_landsat_extractMTL(meta_data, "REFLECTANCE_ADD_BAND_%i" % (band)))
+    SE = math.radians(float(_landsat_extractMTL(meta_data, "SUN_ELEVATION")))
+
+    Reflect_toa = (np.where(dn > 0, (Mp * dn + Ap) / math.sin(SE), 0))
+
+    return Reflect_toa
+
+
+    # Conversion Top Of Atmosphere planetary reflectance
+    # REF: http://landsat.usgs.gov/Landsat8_Using_Product.php
+
+
+def _landsat_extractMTL(meta_data, param):
+    """ Extract Parameters from MTL file """
+
+    for line in meta_data:
+        data = line.split(' = ')
+        if (data[0]).strip() == param:
+            return (data[1]).strip()
