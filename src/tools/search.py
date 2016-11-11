@@ -1,7 +1,10 @@
 import requests
 from osgeo import gdal
+import numpy as np
+from pyproj import Proj, transform
 
 api_url = 'https://api.developmentseed.org/landsat'
+
 
 def search_landsat(lng, lat, min_date, max_date, limit):
 
@@ -43,7 +46,6 @@ def search_landsat(lng, lat, min_date, max_date, limit):
 
             count += 1
 
-
         return data
 
 
@@ -64,8 +66,61 @@ def _query_builder(lng, lat, min_date, max_date):
 
     return query
 
+
 def _aws_get_ndvi(scene_id, lng, lat):
 
-    ndvi = 0.8
+    bands = [5, 4]
+    data = []
+
+    for band in bands:
+
+        url = _aws_url_builder(scene_id, band)
+
+        src = gdal.Open(url)
+        prj = src.GetProjection()
+        epsg_out = prj.split('"EPSG",')[-1].strip(']').strip('"')
+
+        lng2, lat2 = _convert_coords(lng, lat, 4326, epsg_out)
+
+        x, y = _world2pixel(src, lng2, lat2)
+
+        pixel = src.ReadAsArray(y, x, 1, 1).astype('float32')
+
+        data.append(pixel)
+
+    ndvi = (data[0] - data[1]) / (data[0] + data[1])
 
     return ndvi
+
+
+def _aws_url_builder(scene_id, band):
+
+    path, row = scene_id[3:6], scene_id[6:9]
+
+    url = '/vsicurl/http://landsat-pds.s3.amazonaws.com/L8/%s/%s/%s/%s_B%s.TIF' % (path, row, scene_id, scene_id, band)
+
+    return url
+
+
+def _convert_coords(lng, lat, epsg_in, epsg_out):
+
+    inProj = Proj(init='epsg:%s' % (epsg_in))
+    outProj = Proj(init='epsg:%s' % (epsg_out))
+    x1, y1 = lng, lat
+    x2, y2 = transform(inProj, outProj, x1, y1)
+
+    return x2, y2
+
+
+def _world2pixel(src, lng, lat):
+
+    gt = src.GetGeoTransform()
+
+    ulX, ulY = gt[0], gt[3]
+    xDist = gt[1]
+
+    x = np.round((lng - ulX) / xDist).astype(np.int)
+    y = np.round((ulY - lat) / xDist).astype(np.int)
+
+    return x, y
+
