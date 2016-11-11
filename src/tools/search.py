@@ -138,7 +138,10 @@ def _world2pixel(src, lng, lat):
 
     return x, y
 
-
+    # Conversion Top Of Atmosphere planetary reflectance
+    # REF: http://landsat.usgs.gov/Landsat8_Using_Product.php
+    # Following function based on work by Vincent Sarago:
+    # https://github.com/vincentsarago/landsatgif/blob/master/landsat_gif.py
 def _radiance2reflectance(dn, band, meta_data):
 
     Mp = float(_landsat_extractMTL(meta_data, "REFLECTANCE_MULT_BAND_%i" % (band)))
@@ -150,8 +153,6 @@ def _radiance2reflectance(dn, band, meta_data):
     return Reflect_toa
 
 
-    # Conversion Top Of Atmosphere planetary reflectance
-    # REF: http://landsat.usgs.gov/Landsat8_Using_Product.php
 
 
 def _landsat_extractMTL(meta_data, param):
