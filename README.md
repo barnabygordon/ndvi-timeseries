@@ -7,6 +7,9 @@ This method uses Landsat-8 imagery which is freely available at [AWS](https://aw
 Without calibration:
 ![alt text](https://github.com/BarnabyGordon/ndvi-timeseries/blob/master/figures/without_calibration.png)
 
+With calibration:
+![alt text](https://github.com/BarnabyGordon/ndvi-timeseries/blob/master/figures/with_calibration.png)
+
 ## Usage
 
 - The provided coordinate must in WGS84 (EPSG: 4326)
