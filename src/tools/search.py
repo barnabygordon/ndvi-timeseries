@@ -3,9 +3,9 @@ from osgeo import gdal
 
 api_url = 'https://api.developmentseed.org/landsat'
 
-def search_landsat(lng, lat, limit):
+def search_landsat(lng, lat, min_date, max_date, limit):
 
-    query = _query_builder(lng, lat)
+    query = _query_builder(lng, lat, min_date, max_date)
 
     r = requests.get('%s?search=%s&limit=%s' % (api_url, query, int(limit)))
 
@@ -15,6 +15,7 @@ def search_landsat(lng, lat, limit):
     if r_status != 200:
 
         print 'Bad URL!!'
+        print query
 
     else:
         r_result = r.json()['results']
@@ -46,23 +47,18 @@ def search_landsat(lng, lat, limit):
         return data
 
 
-def _query_builder(lng, lat):
+def _query_builder(lng, lat, min_date, max_date):
 
     min_cloud, max_cloud = -1, 20
-    min_date, max_date = '2014-01-01', '2016-01-01'
 
     dates = 'acquisitionDate:[%s+TO+%s]' % (min_date, max_date)
 
     clouds = 'cloudCoverFull:[%s+TO+%s]' % (min_cloud, max_cloud)
 
-    UlLat = 'upperLeftCornerLatitude:[52+TO+1000]'
-
-    LrLat = 'lowerRightCornerLatitude:[-1000+TO+52]'
-
-    LlLng = 'lowerLeftCornerLongitude:[-1000+TO+48]'
-
-    UrLng = 'upperRightCornerLongitude:[48+TO+1000]'
-
+    UlLat = 'upperLeftCornerLatitude:[%s+TO+1000]' % (lat)
+    LrLat = 'lowerRightCornerLatitude:[-1000+TO+%s]' % (lat)
+    LlLng = 'lowerLeftCornerLongitude:[-1000+TO+%s]' % (lng)
+    UrLng = 'upperRightCornerLongitude:[%s+TO+1000]' % (lng)
 
     query = '%s+AND+%s+AND+%s+AND+%s+AND+%s+AND+%s' % (dates, clouds, UlLat, LrLat, LlLng, UrLng)
 
