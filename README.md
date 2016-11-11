@@ -12,6 +12,12 @@ With calibration:
 
 ## Usage
 
+```python
+data = s.search_landsat(-4.557974, 50.349318, '2014-01-01', '2016-01-01' , 10)
+print data[0]['ndvi']
+```
+[[ 0.33013105]]
+
 - The provided coordinate must in WGS84 (EPSG: 4326)
 - A start and end date must be provided (YYYY-MM-DD)
 - The number of acquisitions of interest should also be give (will take longer to process the greater this value)
