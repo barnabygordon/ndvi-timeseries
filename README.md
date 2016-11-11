@@ -1,6 +1,8 @@
 # NDVI Time Series
 
-A tool for automatically calculating NDVI (Normalised Difference Vegetation Index) based on a given coordinate
+A tool for automatically calculating NDVI (Normalised Difference Vegetation Index) based on a given coordinate.
+
+This method uses Landsat-8 imagery which is freely available at [AWS](https://aws.amazon.com/public-data-sets/landsat/).
 
 Without calibration:
 ![alt text](https://github.com/BarnabyGordon/ndvi-timeseries/blob/master/figures/without_calibration.png)
