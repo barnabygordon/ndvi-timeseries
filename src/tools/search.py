@@ -2,163 +2,154 @@ import requests
 from osgeo import gdal
 import numpy as np
 from pyproj import Proj, transform
-import urllib2
+import urllib3
 import math
 
-api_url = 'https://api.developmentseed.org/landsat'
+API_URL = 'https://api.developmentseed.org/landsat'
+WGS84_EPSG = 4326
 
 
-def search_landsat(lng, lat, min_date, max_date, limit):
+class NDVITimeseries:
+    def __init__(self, longitude, latitude, min_cloud=0, max_cloud=100):
+        self.longitude = longitude
+        self.latitude = latitude
+        self.min_cloud = min_cloud
+        self.max_cloud = max_cloud
 
-    query = _query_builder(lng, lat, min_date, max_date)
+    def search_landsat(self, min_date, max_date, limit):
+        query = self._query_builder(min_date, max_date, limit)
+        response = requests.get(query)
 
-    r = requests.get('%s?search=%s&limit=%s' % (api_url, query, int(limit)))
+        if response.status_code != 200:
+            print('Bad URL!! {}'.format(query))
 
-    r_status = r.status_code
+        else:
+            result_list = response.json()['results']
 
-    print r_status
-    if r_status != 200:
+            data = {}
+            for i, result in enumerate(result_list):
+                search_result = {}
 
-        print 'Bad URL!!'
-        print query
+                date = result['date']
+                cloud_cover = result['cloudCover']
+                scene_id = result['sceneID']
+                thumbnail_url = result['thumbnail']
+                ndvi = self._get_ndvi_from_aws(scene_id)
 
-    else:
-        r_result = r.json()['results']
+                search_result['date'] = date
+                search_result['cloud_cover'] = cloud_cover
+                search_result['scene_id'] = scene_id
+                search_result['thumbnail_url'] = thumbnail_url
+                search_result['ndvi'] = ndvi
 
-        data = {}
+                data[i] = search_result
 
-        count = 0
-        for result in r_result:
+            return data
 
-            search_result = {}
+    def _query_builder(self, min_date, max_date, limit: int) -> str:
+        dates = 'acquisitionDate:[{}+TO+{}]'.format(min_date, max_date)
+        clouds = 'cloudCoverFull:[{}+TO+{}]'.format(self.min_cloud, self.max_cloud)
 
-            date = result['date']
-            cloud_cover = result['cloudCover']
-            scene_id = result['sceneID']
-            thumbnail_url = result['thumbnail']
-            ndvi = _aws_get_ndvi(scene_id, lng, lat)
+        upper_latitude = 'upperLeftCornerLatitude:[{}+TO+1000]'.format(self.latitude)
+        lower_latitude = 'lowerRightCornerLatitude:[-1000+TO+{}]'.format(self.latitude)
+        left_longitude = 'lowerLeftCornerLongitude:[-1000+TO+{}]'.format(self.longitude)
+        right_longitude = 'upperRightCornerLongitude:[{}+TO+1000]'.format(self.longitude)
 
-            search_result['date'] = date
-            search_result['cloud_cover'] = cloud_cover
-            search_result['scene_id'] = scene_id
-            search_result['thumbnail_url'] = thumbnail_url
-            search_result['ndvi'] = ndvi
+        query = '{}+AND+{}+AND+{}+AND+{}+AND+{}+AND+{}'.format(
+            dates, clouds, upper_latitude, lower_latitude, left_longitude, right_longitude)
 
-            data[count] = search_result
+        return "{}?search={}&limit={}".format(API_URL, query, limit)
 
-            count += 1
+    def _get_ndvi_from_aws(self, scene_id):
 
-        return data
+        path, row = scene_id[3:6], scene_id[6:9]
 
+        bands = [5, 4]
+        data = []
 
-def _query_builder(lng, lat, min_date, max_date):
+        meta_data = self._get_aws_meta(scene_id, path, row)
 
-    min_cloud, max_cloud = -1, 20
+        for band in bands:
 
-    dates = 'acquisitionDate:[%s+TO+%s]' % (min_date, max_date)
+            url = self._aws_url_builder(scene_id, path, row, band)
 
-    clouds = 'cloudCoverFull:[%s+TO+%s]' % (min_cloud, max_cloud)
+            src = gdal.Open(url)
+            prj = src.GetProjection()
+            epsg_out = prj.split('"EPSG",')[-1].strip(']').strip('"')
 
-    UlLat = 'upperLeftCornerLatitude:[%s+TO+1000]' % (lat)
-    LrLat = 'lowerRightCornerLatitude:[-1000+TO+%s]' % (lat)
-    LlLng = 'lowerLeftCornerLongitude:[-1000+TO+%s]' % (lng)
-    UrLng = 'upperRightCornerLongitude:[%s+TO+1000]' % (lng)
+            lng2, lat2 = self._convert_coords(self.longitude, self.latitude, WGS84_EPSG, epsg_out)
 
-    query = '%s+AND+%s+AND+%s+AND+%s+AND+%s+AND+%s' % (dates, clouds, UlLat, LrLat, LlLng, UrLng)
+            x, y = self._world2pixel(src, lng2, lat2)
 
-    return query
+            dn = src.ReadAsArray(y, x, 1, 1).astype('float32')
 
+            reflectance = self._radiance2reflectance(dn, band, meta_data)
 
-def _aws_get_ndvi(scene_id, lng, lat):
+            data.append(reflectance)
 
-    path, row = scene_id[3:6], scene_id[6:9]
+        ndvi = (data[0] - data[1]) / (data[0] + data[1])
 
-    bands = [5, 4]
-    data = []
+        return ndvi
 
-    meta_data = _get_aws_meta(scene_id, path, row)
+    @staticmethod
+    def _get_aws_meta(scene_id, path, row):
+        meta_url = 'http://landsat-pds.s3.amazonaws.com/L8/{}/{}/{}/{}_MTL.txt'.format(path, row, scene_id, scene_id)
+        # TODO update to Python3
+        meta_data = urllib3.urlopen(meta_url).readlines()
 
-    for band in bands:
+        return meta_data
 
-        url = _aws_url_builder(scene_id, path, row, band)
+    @staticmethod
+    def _aws_url_builder(scene_id, path, row, band):
+        url = '/vsicurl/http://landsat-pds.s3.amazonaws.com/L8/{}/{}/{}/{}_B{}.TIF'.format(
+            path, row, scene_id, scene_id, band)
 
-        src = gdal.Open(url)
-        prj = src.GetProjection()
-        epsg_out = prj.split('"EPSG",')[-1].strip(']').strip('"')
+        return url
 
-        lng2, lat2 = _convert_coords(lng, lat, 4326, epsg_out)
+    @staticmethod
+    def _convert_coords(longitude, latitude, epsg_in, epsg_out):
+        in_proj = Proj(init='epsg:{}'.format(epsg_in))
+        out_proj = Proj(init='epsg:{}'.format(epsg_out))
+        x2, y2 = transform(in_proj, out_proj, longitude, latitude)
 
-        x, y = _world2pixel(src, lng2, lat2)
+        return x2, y2
 
-        dn = src.ReadAsArray(y, x, 1, 1).astype('float32')
+    @staticmethod
+    def _world2pixel(src, lng, lat):
 
-        reflectance = _radiance2reflectance(dn, band, meta_data)
+        gt = src.GetGeoTransform()
 
-        data.append(reflectance)
+        ulx, uly = gt[0], gt[3]
+        x_dist = gt[1]
 
-    ndvi = (data[0] - data[1]) / (data[0] + data[1])
+        x = np.round((lng - uly) / x_dist).astype(np.int)
+        y = np.round((uly - lat) / x_dist).astype(np.int)
 
-    return ndvi
+        return x, y
 
+    def _radiance2reflectance(self, dn, band, meta_data):
+        """ Conversion Top Of Atmosphere planetary reflectance
+        REF: http://landsat.usgs.gov/Landsat8_Using_Product.php
+        Following function based on work by Vincent Sarago:
+        https://github.com/vincentsarago/landsatgif/blob/master/landsat_gif.py
+        :param dn:
+        :param band:
+        :param meta_data:
+        :return:
+        """
 
-def _get_aws_meta(scene_id, path, row):
+        mp = float(self._landsat_extract_mtl(meta_data, "REFLECTANCE_MULT_BAND_{}".format(band)))
+        ap = float(self._landsat_extract_mtl(meta_data, "REFLECTANCE_ADD_BAND_{}".format(band)))
+        se = math.radians(float(self._landsat_extract_mtl(meta_data, "SUN_ELEVATION")))
 
-    meta_url = 'http://landsat-pds.s3.amazonaws.com/L8/%s/%s/%s/%s_MTL.txt' % (path, row, scene_id, scene_id)
-    meta_data = urllib2.urlopen(meta_url).readlines()
+        reflect_toa = (np.where(dn > 0, (mp * dn + ap) / math.sin(se), 0))
 
-    return meta_data
+        return reflect_toa
 
-
-def _aws_url_builder(scene_id, path, row, band):
-
-    url = '/vsicurl/http://landsat-pds.s3.amazonaws.com/L8/%s/%s/%s/%s_B%s.TIF' % (path, row, scene_id, scene_id, band)
-
-    return url
-
-
-def _convert_coords(lng, lat, epsg_in, epsg_out):
-
-    inProj = Proj(init='epsg:%s' % (epsg_in))
-    outProj = Proj(init='epsg:%s' % (epsg_out))
-    x1, y1 = lng, lat
-    x2, y2 = transform(inProj, outProj, x1, y1)
-
-    return x2, y2
-
-
-def _world2pixel(src, lng, lat):
-
-    gt = src.GetGeoTransform()
-
-    ulX, ulY = gt[0], gt[3]
-    xDist = gt[1]
-
-    x = np.round((lng - ulX) / xDist).astype(np.int)
-    y = np.round((ulY - lat) / xDist).astype(np.int)
-
-    return x, y
-
-    # Conversion Top Of Atmosphere planetary reflectance
-    # REF: http://landsat.usgs.gov/Landsat8_Using_Product.php
-    # Following function based on work by Vincent Sarago:
-    # https://github.com/vincentsarago/landsatgif/blob/master/landsat_gif.py
-def _radiance2reflectance(dn, band, meta_data):
-
-    Mp = float(_landsat_extractMTL(meta_data, "REFLECTANCE_MULT_BAND_%i" % (band)))
-    Ap = float(_landsat_extractMTL(meta_data, "REFLECTANCE_ADD_BAND_%i" % (band)))
-    SE = math.radians(float(_landsat_extractMTL(meta_data, "SUN_ELEVATION")))
-
-    Reflect_toa = (np.where(dn > 0, (Mp * dn + Ap) / math.sin(SE), 0))
-
-    return Reflect_toa
-
-
-
-
-def _landsat_extractMTL(meta_data, param):
-    """ Extract Parameters from MTL file """
-
-    for line in meta_data:
-        data = line.split(' = ')
-        if (data[0]).strip() == param:
-            return (data[1]).strip()
+    @staticmethod
+    def _landsat_extract_mtl(meta_data, param):
+        """ Extract Parameters from MTL file """
+        for line in meta_data:
+            data = line.split(' = ')
+            if (data[0]).strip() == param:
+                return (data[1]).strip()
