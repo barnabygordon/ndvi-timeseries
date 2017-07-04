@@ -1,9 +1,10 @@
 import requests
 from osgeo import gdal
 import numpy as np
-from pyproj import Proj, transform
 import urllib3
 import math
+
+from src.tools import gis
 
 API_URL = 'https://api.developmentseed.org/landsat'
 WGS84_EPSG = 4326
@@ -77,9 +78,8 @@ class NDVITimeseries:
             prj = src.GetProjection()
             epsg_out = prj.split('"EPSG",')[-1].strip(']').strip('"')
 
-            lng2, lat2 = self._convert_coords(self.longitude, self.latitude, WGS84_EPSG, epsg_out)
-
-            x, y = self._world2pixel(src, lng2, lat2)
+            lng2, lat2 = gis.convert_coords(self.longitude, self.latitude, WGS84_EPSG, epsg_out)
+            x, y = gis.world_to_pixel(src, lng2, lat2)
 
             dn = src.ReadAsArray(y, x, 1, 1).astype('float32')
 
@@ -105,27 +105,6 @@ class NDVITimeseries:
             path, row, scene_id, scene_id, band)
 
         return url
-
-    @staticmethod
-    def _convert_coords(longitude, latitude, epsg_in, epsg_out):
-        in_proj = Proj(init='epsg:{}'.format(epsg_in))
-        out_proj = Proj(init='epsg:{}'.format(epsg_out))
-        x2, y2 = transform(in_proj, out_proj, longitude, latitude)
-
-        return x2, y2
-
-    @staticmethod
-    def _world2pixel(src, lng, lat):
-
-        gt = src.GetGeoTransform()
-
-        ulx, uly = gt[0], gt[3]
-        x_dist = gt[1]
-
-        x = np.round((lng - uly) / x_dist).astype(np.int)
-        y = np.round((uly - lat) / x_dist).astype(np.int)
-
-        return x, y
 
     def _radiance2reflectance(self, dn, band, meta_data):
         """ Conversion Top Of Atmosphere planetary reflectance
